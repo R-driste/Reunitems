@@ -22,14 +22,26 @@ export function Navbar() {
             <Link href="/contact" className="text-white hover:text-gray-200">
               Contact
             </Link>
+            <Link href="/itemsearch" className="text-white hover:text-gray-200">
+              Test Items
+            </Link>
+            <Link href="/login" className="text-white hover:text-gray-200">
+              Test Login
+            </Link>
           </div>
 
           <div>
             <Link
-              href="/signup"
+              href="/schoolfind"
               className="bg-white text-black px-4 py-2 rounded-lg hover:bg-gray-200"
             >
-              Sign Up
+              Find Your School
+            </Link>
+            <Link
+              href="/signupschool"
+              className="bg-white text-black px-4 py-2 ml-10 rounded-lg hover:bg-gray-200"
+            >
+              Sign Up Your School
             </Link>
           </div>
         </div>
