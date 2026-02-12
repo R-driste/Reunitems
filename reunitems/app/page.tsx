@@ -1,5 +1,8 @@
+"use client";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import { Button } from "@/components/Button";
+import Link from "next/link";
 
 export default function Home() {
   return (
@@ -29,21 +32,19 @@ export default function Home() {
             <div className="flex space-x-4 ml-5 mr-5 items-center w-full">
               <Button 
                 variant="primary" 
-                href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
+                href="/schoolfind"
                 color1="#0e004c"
                 color2="#1e40af"
               >
                 Find Your School
               </Button>
               
-              <Button
-                variant="primary" 
-                href="https://hack.club"
-                color1="#5c95f6"
-                color2="#3a5bed"
-              >
-                Sign Up Your School Lost&Found
-              </Button>
+
+              <Link href="/login" className="bg-[#8B9AF0] hover:bg-blue-500 text-white font-bold rounded-full px-8 py-3 transition">
+                Sign Up For Your School'S Lost&Found
+              </Link>
+
+              
             </div>
           </div>
         </div>
