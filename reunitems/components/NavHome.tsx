@@ -25,6 +25,9 @@ export function Navbar() {
             <Link href="/itemsearch" className="text-white hover:text-gray-200">
               Test Items
             </Link>
+            <Link href="/forms" className="text-white hover:text-gray-200">
+              Test Forms
+            </Link>
             <Link href="/login" className="text-white hover:text-gray-200">
               Test Login
             </Link>
