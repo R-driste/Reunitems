@@ -8,7 +8,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   getDocs,
-  fsQuery,
+  query,
   where,
   addDoc,
   serverTimestamp,
@@ -75,7 +75,7 @@ export default function AddItemPage() {
       setSchoolId(currentSchoolId);
 
       const locationsSnap = await getDocs(
-        fsQuery(
+        query(
           collection(firebaseDb, "locations"),
           where("schoolId", "==", currentSchoolId)
         )

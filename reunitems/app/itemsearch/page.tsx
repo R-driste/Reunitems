@@ -10,7 +10,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   getDocs,
-  fsQuery,
+  query,
   where,
 } from "firebase/firestore";
 import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
@@ -35,10 +35,10 @@ export default function SearchPage() {
 
     const loadItems = async (schoolId?: string | null) => {
       const base = collection(firebaseDb, "items");
-      const q = schoolId
-        ? fsQuery(base, where("schoolId", "==", schoolId))
-        : base;
-      const snap = await getDocs(q);
+      const itemsQuery = schoolId
+        ? query(base, where("schoolId", "==", schoolId))
+        : query(base);
+      const snap = await getDocs(itemsQuery);
       if (cancelled) return;
       const items: Item[] = snap.docs.map((d) => {
         const data = d.data() as any;

@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
-  query as fsQuery,
+  query,
   where,
   getDocs,
   deleteDoc,
@@ -45,7 +45,7 @@ export default function AdminDashboardPage() {
       }
 
       const membershipsSnap = await getDocs(
-        fsQuery(
+        query(
           collection(firebaseDb, "memberships"),
           where("userId", "==", user.uid),
           where("role", "==", "admin")
@@ -62,7 +62,7 @@ export default function AdminDashboardPage() {
       }
 
       const itemsSnap = await getDocs(
-        fsQuery(
+        query(
           collection(firebaseDb, "items"),
           where("schoolId", "==", schoolId)
         )

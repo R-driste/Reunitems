@@ -4,7 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   getDocs,
-  fsQuery,
+  query,
   where,
   addDoc,
   serverTimestamp,
@@ -34,7 +34,7 @@ export default function ClaimButton({ item }: { item: any }) {
     let cancelled = false;
     const load = async () => {
       const snap = await getDocs(
-        fsQuery(
+        query(
           collection(firebaseDb, "claims"),
           where("itemId", "==", item.id)
         )
