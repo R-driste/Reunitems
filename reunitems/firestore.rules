@@ -1,0 +1,84 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is admin of an organization
+    function isAdminOfOrg(orgId) {
+      return request.auth != null && 
+        exists(/databases/$(database)/documents/Organizations/$(orgId)/Members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/Organizations/$(orgId)/Members/$(request.auth.uid)).data.UserRole == 'admin';
+    }
+    
+    // Helper function to check if user is member of an organization
+    function isMemberOfOrg(orgId) {
+      return request.auth != null && 
+        exists(/databases/$(database)/documents/Organizations/$(orgId)/Members/$(request.auth.uid));
+    }
+    
+    // Users collection - users can read/write their own document
+    match /Users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+      
+      // Applications subcollection
+      match /MyApplications/{appId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    
+    // Organizations collection
+    match /Organizations/{orgId} {
+      // Anyone authenticated can read organization info
+      allow read: if request.auth != null;
+      // Only admins can write organization data
+      allow write: if isAdminOfOrg(orgId);
+      
+      // Locations subcollection
+      match /Locations/{locationId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOfOrg(orgId);
+      }
+      
+      // Items subcollection
+      match /Items/{itemId} {
+        allow read: if request.auth != null;
+        allow write: if isAdminOfOrg(orgId);
+      }
+      
+      // Members subcollection
+      match /Members/{memberId} {
+        // Members can read all members of their org
+        allow read: if isMemberOfOrg(orgId);
+        // Only admins can write members
+        allow write: if isAdminOfOrg(orgId);
+      }
+      
+      // Requests subcollection
+      match /Requests/{requestId} {
+        // Members can read requests, admins can read all
+        allow read: if isMemberOfOrg(orgId);
+        // Any member can create requests
+        allow create: if isMemberOfOrg(orgId);
+        // Only admins can update/delete requests
+        allow update, delete: if isAdminOfOrg(orgId);
+      }
+    }
+    
+    // Claims collection (top-level)
+    match /Claims/{claimId} {
+      // Anyone authenticated can read claims
+      allow read: if request.auth != null;
+      // Anyone authenticated can create claims
+      allow create: if request.auth != null;
+      // Users can update their own claims, admins can update any claim
+      allow update: if request.auth != null && (
+        resource.data.ClaimUser == /databases/$(database)/documents/Users/$(request.auth.uid) ||
+        // Check if user is admin of the organization that owns the item
+        exists(/databases/$(database)/documents/Organizations/$(get(resource.data.ClaimRef).data.schoolId)/Members/$(request.auth.uid))
+      );
+      // Only admins can delete claims
+      allow delete: if request.auth != null;
+    }
+  }
+}

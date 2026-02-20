@@ -2,21 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  orderBy,
-} from "firebase/firestore";
+import { doc } from "firebase/firestore";
 import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
+import { getClaimsByUser, type Claim } from "@/lib/firebaseHelpers";
 
 type ClaimWithItem = {
   id: string;
   itemName?: string;
   itemLocation?: string;
   createdAt?: Date;
-  message?: string;
+  claimEvidence?: string;
+  claimAnswer?: string;
 };
 
 export default function ProfilePage() {
@@ -34,24 +30,45 @@ export default function ProfilePage() {
       }
 
       try {
-        const claimsSnap = await getDocs(
-          query(
-            collection(firebaseDb, "claims"),
-            where("userId", "==", firebaseUser.uid),
-            orderBy("createdAt", "desc")
-          )
+        const userRef = doc(firebaseDb, "Users", firebaseUser.uid);
+        const claimsList: Claim[] = await getClaimsByUser(userRef);
+
+        // Load item details for each claim
+        const mapped: ClaimWithItem[] = await Promise.all(
+          claimsList.map(async (claim) => {
+            let itemName = "Unknown item";
+            let itemLocation = "Unknown location";
+
+            try {
+              // Get item from reference
+              const itemDoc = await claim.ClaimRef.get();
+              if (itemDoc.exists()) {
+                const itemData = itemDoc.data();
+                itemName = itemData.ItemName || itemName;
+
+                // Get location from item's location reference
+                if (itemData.ItemLoc) {
+                  const locationDoc = await itemData.ItemLoc.get();
+                  if (locationDoc.exists()) {
+                    itemLocation = locationDoc.data().LocName || itemLocation;
+                  }
+                }
+              }
+            } catch (e) {
+              console.error("Error loading item details", e);
+            }
+
+            return {
+              id: claim.id,
+              itemName,
+              itemLocation,
+              createdAt: claim.createdAt?.toDate?.() ?? undefined,
+              claimEvidence: claim.ClaimEvidence,
+              claimAnswer: claim.ClaimAnswer,
+            };
+          })
         );
 
-        const mapped: ClaimWithItem[] = claimsSnap.docs.map((d) => {
-          const data = d.data() as any;
-          return {
-            id: d.id,
-            itemName: data.itemName,
-            itemLocation: data.itemLocation,
-            createdAt: data.createdAt?.toDate?.() ?? undefined,
-            message: data.message,
-          };
-        });
         setClaims(mapped);
       } catch (e) {
         console.error("Error fetching claims", e);
@@ -116,8 +133,15 @@ export default function ProfilePage() {
                       Claimed on: {c.createdAt.toLocaleString()}
                     </p>
                   )}
-                  {c.message && (
-                    <p className="mt-2 text-gray-700">Message: {c.message}</p>
+                  {c.claimEvidence && (
+                    <p className="mt-2 text-gray-700">
+                      <strong>Evidence:</strong> {c.claimEvidence}
+                    </p>
+                  )}
+                  {c.claimAnswer && (
+                    <p className="mt-2 text-green-700">
+                      <strong>Admin Response:</strong> {c.claimAnswer}
+                    </p>
                   )}
                 </div>
               ))}

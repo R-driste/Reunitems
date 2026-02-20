@@ -1,26 +1,18 @@
- "use client";
+"use client";
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Plus, Upload } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
-import {
-  collection,
-  getDocs,
-  query,
-  where,
-  addDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { doc } from "firebase/firestore";
 import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
-
-type Location = {
-  id: string;
-  name: string;
-  lat: number;
-  lng: number;
-};
+import {
+  getUserOrganizations,
+  getLocations,
+  addItem,
+  type Location,
+} from "@/lib/firebaseHelpers";
 
 export default function AddItemPage() {
   const router = useRouter();
@@ -36,7 +28,7 @@ export default function AddItemPage() {
   const [selectedLocationId, setSelectedLocationId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [schoolId, setSchoolId] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,59 +40,38 @@ export default function AddItemPage() {
         return;
       }
 
-      let currentSchoolId: string | null = null;
-      if (typeof window !== "undefined") {
-        currentSchoolId = localStorage.getItem("currentSchoolId");
-      }
+      try {
+        // Get user's organizations and find admin org
+        const userOrgs = await getUserOrganizations(user.uid);
+        const adminOrg = userOrgs.find((uo) => uo.member.UserRole === "admin");
 
-      if (!currentSchoolId) {
-        const membershipsSnap = await getDocs(
-          fsQuery(
-            collection(firebaseDb, "memberships"),
-            where("userId", "==", user.uid),
-            where("role", "==", "admin")
-          )
-        );
-        const membership = membershipsSnap.docs[0];
-        if (!membership) {
+        if (!adminOrg) {
           router.replace("/");
           return;
         }
-        currentSchoolId = membership.data().schoolId as string;
+
+        const currentOrgId = adminOrg.orgId;
+        setOrgId(currentOrgId);
+
         if (typeof window !== "undefined") {
-          localStorage.setItem("currentSchoolId", currentSchoolId);
+          localStorage.setItem("currentOrgId", currentOrgId);
         }
+
+        // Load locations from Organizations/{orgId}/Locations
+        const loaded = await getLocations(currentOrgId);
+
+        if (cancelled) return;
+
+        setLocations(loaded);
+      } catch (e) {
+        console.error("Failed to load add-item data", e);
+      } finally {
+        setLoading(false);
       }
-
-      setSchoolId(currentSchoolId);
-
-      const locationsSnap = await getDocs(
-        query(
-          collection(firebaseDb, "locations"),
-          where("schoolId", "==", currentSchoolId)
-        )
-      );
-
-      if (cancelled) return;
-
-      const loaded: Location[] = locationsSnap.docs.map((d) => {
-        const data = d.data() as any;
-        return {
-          id: d.id,
-          name: data.name,
-          lat: data.lat,
-          lng: data.lng,
-        };
-      });
-      setLocations(loaded);
-      setLoading(false);
     };
 
     const unsub = onAuthStateChanged(firebaseAuth, () => {
-      load().catch((e) => {
-        console.error("Failed to load add-item data", e);
-        setLoading(false);
-      });
+      load();
     });
 
     return () => {
@@ -118,6 +89,7 @@ export default function AddItemPage() {
     if (file) {
       const imageUrl = URL.createObjectURL(file);
       setImagePreview(imageUrl);
+      // TODO: Upload to Firebase Storage and get URL
     }
   };
 
@@ -130,17 +102,14 @@ export default function AddItemPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitting) return;
+    if (submitting || !orgId) return;
 
     const user = firebaseAuth.currentUser;
     if (!user) {
       alert("Please sign in again.");
       return;
     }
-    if (!schoolId) {
-      alert("Could not determine your school. Please go back to the dashboard.");
-      return;
-    }
+
     if (!selectedLocationId) {
       alert("Please choose a location for this item.");
       return;
@@ -154,16 +123,14 @@ export default function AddItemPage() {
 
     try {
       setSubmitting(true);
-      await addDoc(collection(firebaseDb, "items"), {
-        schoolId,
-        locationId: location.id,
-        locationName: location.name,
-        name: formData.name,
-        description: formData.description,
-        foundDate: formData.date,
-        color: "bg-indigo-200",
-        createdAt: serverTimestamp(),
-        createdBy: user.uid,
+
+      // Create item in Organizations/{orgId}/Items
+      await addItem(orgId, {
+        ItemName: formData.name,
+        ItemDesc: formData.description,
+        ItemLoc: doc(firebaseDb, "Organizations", orgId, "Locations", location.id),
+        ItemImg: imagePreview || undefined,
+        ItemTime: formData.date ? new Date(formData.date) : new Date(),
       });
 
       alert(`Item "${formData.name}" added to inventory!`);
@@ -178,11 +145,10 @@ export default function AddItemPage() {
 
   return (
     <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans">
-      
       {/* --- HEADER --- */}
       <header className="px-6 py-4 flex items-center bg-[#8B9AF0] text-[#1E1B4B]">
         <Link href="/admin/dashboard" className="mr-4 hover:scale-110 transition-transform">
-            <ArrowLeft className="w-8 h-8" />
+          <ArrowLeft className="w-8 h-8" />
         </Link>
         <h1 className="text-2xl font-extrabold">Add New Item</h1>
       </header>
@@ -210,101 +176,98 @@ export default function AddItemPage() {
             </Link>
           </div>
         ) : (
-        <form onSubmit={handleSubmit} className="bg-white w-full rounded-3xl shadow-xl overflow-hidden flex flex-col md:flex-row">
-            
+          <form onSubmit={handleSubmit} className="bg-white w-full rounded-3xl shadow-xl overflow-hidden flex flex-col md:flex-row">
             {/* --- LEFT SIDE: IMAGE UPLOAD --- */}
-            <div 
-                className="w-full md:w-5/12 bg-[#D9D9D9] p-8 flex flex-col items-center justify-center min-h-[300px] cursor-pointer hover:bg-gray-300 transition group relative overflow-hidden"
-                onClick={handleImageClick}
+            <div
+              className="w-full md:w-5/12 bg-[#D9D9D9] p-8 flex flex-col items-center justify-center min-h-[300px] cursor-pointer hover:bg-gray-300 transition group relative overflow-hidden"
+              onClick={handleImageClick}
             >
-                <input 
-                    type="file" 
-                    accept="image/*" 
-                    ref={fileInputRef} 
-                    onChange={handleFileChange} 
-                    className="hidden" 
-                />
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                className="hidden"
+              />
 
-                {imagePreview ? (
-                    <img src={imagePreview} alt="Preview" className="absolute inset-0 w-full h-full object-cover" />
-                ) : (
-                    <div className="bg-[#B3B3B3] rounded-full p-4 shadow-lg group-hover:scale-110 transition-transform">
-                        <Plus className="w-12 h-12 text-white" strokeWidth={3} />
-                    </div>
-                )}
+              {imagePreview ? (
+                <img src={imagePreview} alt="Preview" className="absolute inset-0 w-full h-full object-cover" />
+              ) : (
+                <div className="bg-[#B3B3B3] rounded-full p-4 shadow-lg group-hover:scale-110 transition-transform">
+                  <Plus className="w-12 h-12 text-white" strokeWidth={3} />
+                </div>
+              )}
             </div>
 
             {/* --- RIGHT SIDE: FORM FIELDS --- */}
             <div className="w-full md:w-7/12 p-8 flex flex-col gap-5 bg-white">
-                
-                {/* Item Name */}
-                <div>
-                    <label className="block text-xl font-bold text-black mb-2">Item Name</label>
-                    <input 
-                        type="text" 
-                        name="name"
-                        value={formData.name}
-                        onChange={handleInputChange}
-                        required
-                        className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]" 
-                    />
+              {/* Item Name */}
+              <div>
+                <label className="block text-xl font-bold text-black mb-2">Item Name</label>
+                <input
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]"
+                />
+              </div>
+
+              {/* Location and Date Row */}
+              <div className="flex flex-col md:flex-row gap-4">
+                <div className="flex-1">
+                  <label className="block text-xl font-bold text-black mb-2">Location Found</label>
+                  <select
+                    value={selectedLocationId}
+                    onChange={(e) => setSelectedLocationId(e.target.value)}
+                    required
+                    className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]"
+                  >
+                    <option value="">Select a campus location</option>
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.LocName}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-
-                {/* Location and Date Row */}
-                <div className="flex flex-col md:flex-row gap-4">
-                    <div className="flex-1">
-                        <label className="block text-xl font-bold text-black mb-2">Location Found</label>
-                        <select
-                          value={selectedLocationId}
-                          onChange={(e) => setSelectedLocationId(e.target.value)}
-                          required
-                          className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]"
-                        >
-                          <option value="">Select a campus location</option>
-                          {locations.map((loc) => (
-                            <option key={loc.id} value={loc.id}>
-                              {loc.name}
-                            </option>
-                          ))}
-                        </select>
-                    </div>
-                    <div className="flex-1">
-                        <label className="block text-xl font-bold text-black mb-2">Date Found</label>
-                        <input 
-                            type="date" 
-                            name="date"
-                            value={formData.date}
-                            onChange={handleInputChange}
-                            required
-                            className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]" 
-                        />
-                    </div>
+                <div className="flex-1">
+                  <label className="block text-xl font-bold text-black mb-2">Date Found</label>
+                  <input
+                    type="date"
+                    name="date"
+                    value={formData.date}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]"
+                  />
                 </div>
+              </div>
 
-                 {/* Description */}
-                 <div>
-                    <label className="block text-xl font-bold text-black mb-2">Description</label>
-                    <textarea 
-                        name="description"
-                        value={formData.description}
-                        onChange={handleInputChange}
-                        rows={6} 
-                        className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B] resize-none"
-                    />
-                </div>
+              {/* Description */}
+              <div>
+                <label className="block text-xl font-bold text-black mb-2">Description</label>
+                <textarea
+                  name="description"
+                  value={formData.description}
+                  onChange={handleInputChange}
+                  rows={6}
+                  className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B] resize-none"
+                />
+              </div>
 
-                {/* UPLOAD BUTTON */}
-                <button 
-                    type="submit" 
-                    disabled={submitting}
-                    className="w-full bg-[#1E1B4B] hover:bg-indigo-900 text-white text-xl font-bold py-4 rounded-2xl shadow-md transition-transform hover:-translate-y-1 mt-4 flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
-                >
-                    <Upload className="w-6 h-6" />
-                    {submitting ? "UPLOADING..." : "UPLOAD ITEM"}
-                </button>
-
+              {/* UPLOAD BUTTON */}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-[#1E1B4B] hover:bg-indigo-900 text-white text-xl font-bold py-4 rounded-2xl shadow-md transition-transform hover:-translate-y-1 mt-4 flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
+              >
+                <Upload className="w-6 h-6" />
+                {submitting ? "UPLOADING..." : "UPLOAD ITEM"}
+              </button>
             </div>
-        </form>
+          </form>
         )}
       </main>
     </div>

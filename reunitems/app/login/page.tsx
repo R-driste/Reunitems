@@ -1,4 +1,4 @@
-“use client”;
+"use client";
 
 import { useState } from "react";
 import Link from "next/link";
@@ -10,29 +10,20 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
-import {
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  where,
-  serverTimestamp,
-} from "firebase/firestore";
+import { doc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
-
-type Membership = {
-  id: string;
-  userId: string;
-  schoolId: string;
-  role: "admin" | "student";
-};
+import {
+  createOrUpdateUser,
+  getUserOrganizations,
+  addMember,
+} from "@/lib/firebaseHelpers";
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"admin" | "student" | null>(null);
-  const [schoolName, setSchoolName] = useState("");
+  const [orgName, setOrgName] = useState("");
 
   const signIn = async () => {
     try {
@@ -43,68 +34,64 @@ export default function LoginPage() {
         return;
       }
 
-      // Load memberships for this user
-      const membershipsSnap = await getDocs(
-        query(
-          collection(firebaseDb, "memberships"),
-          where("userId", "==", user.uid)
-        )
-      );
-      const memberships: Membership[] = membershipsSnap.docs.map((d) => ({
-        id: d.id,
-        userId: d.data().userId,
-        schoolId: d.data().schoolId,
-        role: d.data().role,
-      }));
+      // Create/update user in Users collection
+      await createOrUpdateUser(user.uid, {
+        UserEmail: user.email || "",
+        UserName: user.displayName || user.email || undefined,
+      });
 
-      const adminMembership = memberships.find((m) => m.role === "admin");
-      if (adminMembership) {
-        // Remember current school for admin flows (items, locations, map)
-        if (typeof window !== "undefined") {
-          localStorage.setItem("currentSchoolId", adminMembership.schoolId);
-        }
-      }
+      // Get user's organizations
+      const userOrgs = await getUserOrganizations(user.uid);
+      const adminOrg = userOrgs.find((uo) => uo.member.UserRole === "admin");
 
-    if (role === "admin") {
-      if (adminMembership) {
-        router.replace("/admin/dashboard");
-      } else {
-        // First-time admin login - create school and membership
-        if (!schoolName) {
-          alert("Please provide a school name to create your admin account.");
-          return;
-        }
-
-        try {
-          // Create a school document
-          const schoolRef = await addDoc(collection(firebaseDb, "schools"), {
-            name: schoolName,
-            adminUserId: user.uid,
-            createdAt: serverTimestamp(),
-          });
-
-          // Create membership for this admin
-          await addDoc(collection(firebaseDb, "memberships"), {
-            userId: user.uid,
-            schoolId: schoolRef.id,
-            role: "admin",
-            createdAt: serverTimestamp(),
-          });
-
+      if (role === "admin") {
+        if (adminOrg) {
+          // Remember current organization for admin flows
           if (typeof window !== "undefined") {
-            localStorage.setItem("currentSchoolId", schoolRef.id);
+            localStorage.setItem("currentOrgId", adminOrg.orgId);
+          }
+          router.replace("/admin/dashboard");
+        } else {
+          // First-time admin login - create organization and member
+          if (!orgName) {
+            alert("Please provide an organization name to create your admin account.");
+            return;
           }
 
-          alert("Admin school created successfully!");
-          router.replace("/admin/dashboard");
-        } catch (err: any) {
-          console.error(err);
-          alert("Could not create school or membership: " + (err?.message || String(err)));
+          try {
+            // Create an organization document
+            const orgRef = await addDoc(collection(firebaseDb, "Organizations"), {
+              name: orgName,
+              createdAt: serverTimestamp(),
+            });
+
+            // Create member for this admin in Organizations/Members subcollection
+            await addMember(orgRef.id, {
+              UserRef: doc(firebaseDb, "Users", user.uid),
+              UserRole: "admin",
+              ApplicationStatus: "approved",
+            });
+
+            if (typeof window !== "undefined") {
+              localStorage.setItem("currentOrgId", orgRef.id);
+            }
+
+            alert("Admin organization created successfully!");
+            router.replace("/admin/dashboard");
+          } catch (err: any) {
+            console.error(err);
+            alert("Could not create organization or member: " + (err?.message || String(err)));
+          }
         }
+      } else {
+        // Regular user - find their organization or show item search
+        if (userOrgs.length > 0) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("currentOrgId", userOrgs[0].orgId);
+          }
+        }
+        router.replace("/itemsearch");
       }
-    } else {
-      router.replace("/itemsearch");
-    }
     } catch (error: any) {
       console.error(error);
       alert(error?.message || "Failed to sign in.");
@@ -113,7 +100,14 @@ export default function LoginPage() {
 
   const signUp = async () => {
     try {
-      await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      const user = cred.user;
+
+      // Create user in Users collection
+      await createOrUpdateUser(user.uid, {
+        UserEmail: user.email || "",
+        UserName: user.displayName || user.email || undefined,
+      });
 
       if (role === "admin") {
         alert("Sign up successful! After confirming your email, sign in and we'll set up your admin account.");
@@ -133,12 +127,32 @@ export default function LoginPage() {
       const user = cred.user;
       if (!user) return;
 
-      // Ensure we have at least a basic membership record for students in the future if needed
-      // For now, we just route based on chosen role.
+      // Create/update user in Users collection
+      await createOrUpdateUser(user.uid, {
+        UserEmail: user.email || "",
+        UserName: user.displayName || user.email || undefined,
+      });
+
+      // Get user's organizations
+      const userOrgs = await getUserOrganizations(user.uid);
+      const adminOrg = userOrgs.find((uo) => uo.member.UserRole === "admin");
+
       if (role === "admin") {
-        // Admin will still need a school created on first login
-        router.replace("/admin/dashboard");
+        if (adminOrg) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("currentOrgId", adminOrg.orgId);
+          }
+          router.replace("/admin/dashboard");
+        } else {
+          // Admin will need to create organization on first login
+          router.replace("/admin/dashboard");
+        }
       } else {
+        if (userOrgs.length > 0) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("currentOrgId", userOrgs[0].orgId);
+          }
+        }
         router.replace("/itemsearch");
       }
     } catch (error: any) {
@@ -190,7 +204,7 @@ export default function LoginPage() {
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="p-3 rounded-xl border" />
             <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="p-3 rounded-xl border" />
             {role === "admin" && (
-              <input value={schoolName} onChange={(e) => setSchoolName(e.target.value)} placeholder="School Name" className="p-3 rounded-xl border" />
+              <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Organization Name" className="p-3 rounded-xl border" />
             )}
             <div className="flex gap-3">
               <button onClick={signIn} className="flex-1 bg-[#1E1B4B] text-white py-3 rounded-xl">Sign in</button>
