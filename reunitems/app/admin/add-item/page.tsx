@@ -1,33 +1,118 @@
-"use client";
+ "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Plus, Upload } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  collection,
+  getDocs,
+  fsQuery,
+  where,
+  addDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
+
+type Location = {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
 
 export default function AddItemPage() {
   const router = useRouter();
-  
-  // 1. References & State for the Image
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-
-  // 2. State for the rest of the form data (Time and Category removed)
   const [formData, setFormData] = useState({
     name: "",
-    location: "",
     date: "",
-    description: ""
+    description: "",
   });
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [selectedLocationId, setSelectedLocationId] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [schoolId, setSchoolId] = useState<string | null>(null);
 
-  // --- HANDLERS ---
+  useEffect(() => {
+    let cancelled = false;
 
-  // Trigger the hidden file input when the gray box is clicked
+    const load = async () => {
+      const user = firebaseAuth.currentUser;
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      let currentSchoolId: string | null = null;
+      if (typeof window !== "undefined") {
+        currentSchoolId = localStorage.getItem("currentSchoolId");
+      }
+
+      if (!currentSchoolId) {
+        const membershipsSnap = await getDocs(
+          fsQuery(
+            collection(firebaseDb, "memberships"),
+            where("userId", "==", user.uid),
+            where("role", "==", "admin")
+          )
+        );
+        const membership = membershipsSnap.docs[0];
+        if (!membership) {
+          router.replace("/");
+          return;
+        }
+        currentSchoolId = membership.data().schoolId as string;
+        if (typeof window !== "undefined") {
+          localStorage.setItem("currentSchoolId", currentSchoolId);
+        }
+      }
+
+      setSchoolId(currentSchoolId);
+
+      const locationsSnap = await getDocs(
+        fsQuery(
+          collection(firebaseDb, "locations"),
+          where("schoolId", "==", currentSchoolId)
+        )
+      );
+
+      if (cancelled) return;
+
+      const loaded: Location[] = locationsSnap.docs.map((d) => {
+        const data = d.data() as any;
+        return {
+          id: d.id,
+          name: data.name,
+          lat: data.lat,
+          lng: data.lng,
+        };
+      });
+      setLocations(loaded);
+      setLoading(false);
+    };
+
+    const unsub = onAuthStateChanged(firebaseAuth, () => {
+      load().catch((e) => {
+        console.error("Failed to load add-item data", e);
+        setLoading(false);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [router]);
+
   const handleImageClick = () => {
     fileInputRef.current?.click();
   };
 
-  // Read the selected file and create a preview URL
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -36,39 +121,59 @@ export default function AddItemPage() {
     }
   };
 
-  // Update text fields as the user types
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Handle the final Upload button click
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // 1. Create the new item object
-    const newItem = {
-      id: Date.now(), // Uses current time as a unique ID
-      name: formData.name,
-      location: formData.location,
-      date: formData.date,
-      color: "bg-indigo-200", // Default color for new items
-    };
+    if (submitting) return;
 
-    // 2. Get existing items from memory (or start with empty list)
-    const existingData = localStorage.getItem("inventory");
-    const currentInventory = existingData ? JSON.parse(existingData) : [];
+    const user = firebaseAuth.currentUser;
+    if (!user) {
+      alert("Please sign in again.");
+      return;
+    }
+    if (!schoolId) {
+      alert("Could not determine your school. Please go back to the dashboard.");
+      return;
+    }
+    if (!selectedLocationId) {
+      alert("Please choose a location for this item.");
+      return;
+    }
 
-    // 3. Add new item to the list
-    const updatedInventory = [...currentInventory, newItem];
+    const location = locations.find((l) => l.id === selectedLocationId);
+    if (!location) {
+      alert("Selected location not found.");
+      return;
+    }
 
-    // 4. Save back to memory
-    localStorage.setItem("inventory", JSON.stringify(updatedInventory));
-    
-    alert(`Item "${formData.name}" added to inventory!`);
-    
-    // 5. Redirect
-    router.push("/admin/dashboard");
+    try {
+      setSubmitting(true);
+      await addDoc(collection(firebaseDb, "items"), {
+        schoolId,
+        locationId: location.id,
+        locationName: location.name,
+        name: formData.name,
+        description: formData.description,
+        foundDate: formData.date,
+        color: "bg-indigo-200",
+        createdAt: serverTimestamp(),
+        createdBy: user.uid,
+      });
+
+      alert(`Item "${formData.name}" added to inventory!`);
+      router.push("/admin/dashboard");
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Could not add item.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -84,7 +189,27 @@ export default function AddItemPage() {
 
       {/* --- MAIN FORM CONTENT --- */}
       <main className="flex-1 px-6 py-8 max-w-5xl mx-auto w-full flex items-center justify-center">
-        
+        {loading ? (
+          <div className="text-xl font-semibold text-[#1E1B4B]">
+            Loading locations for your campus...
+          </div>
+        ) : locations.length === 0 ? (
+          <div className="bg-white rounded-3xl shadow-xl p-8 text-center max-w-xl">
+            <p className="text-lg text-gray-700 mb-4">
+              You haven't added any locations for your campus yet.
+            </p>
+            <p className="text-gray-600 mb-6">
+              Go to the Locations page to plot lost &amp; found spots on your campus map, then
+              come back here to add items to those locations.
+            </p>
+            <Link
+              href="/admin/locations"
+              className="inline-flex items-center justify-center bg-[#1E1B4B] text-white px-6 py-3 rounded-2xl font-bold hover:bg-indigo-900 transition"
+            >
+              Go to Locations
+            </Link>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="bg-white w-full rounded-3xl shadow-xl overflow-hidden flex flex-col md:flex-row">
             
             {/* --- LEFT SIDE: IMAGE UPLOAD --- */}
@@ -129,14 +254,19 @@ export default function AddItemPage() {
                 <div className="flex flex-col md:flex-row gap-4">
                     <div className="flex-1">
                         <label className="block text-xl font-bold text-black mb-2">Location Found</label>
-                        <input 
-                            type="text" 
-                            name="location"
-                            value={formData.location}
-                            onChange={handleInputChange}
-                            required
-                            className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]" 
-                        />
+                        <select
+                          value={selectedLocationId}
+                          onChange={(e) => setSelectedLocationId(e.target.value)}
+                          required
+                          className="w-full bg-[#D9D9D9] rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-[#1E1B4B]"
+                        >
+                          <option value="">Select a campus location</option>
+                          {locations.map((loc) => (
+                            <option key={loc.id} value={loc.id}>
+                              {loc.name}
+                            </option>
+                          ))}
+                        </select>
                     </div>
                     <div className="flex-1">
                         <label className="block text-xl font-bold text-black mb-2">Date Found</label>
@@ -166,14 +296,16 @@ export default function AddItemPage() {
                 {/* UPLOAD BUTTON */}
                 <button 
                     type="submit" 
-                    className="w-full bg-[#1E1B4B] hover:bg-indigo-900 text-white text-xl font-bold py-4 rounded-2xl shadow-md transition-transform hover:-translate-y-1 mt-4 flex items-center justify-center gap-3 cursor-pointer"
+                    disabled={submitting}
+                    className="w-full bg-[#1E1B4B] hover:bg-indigo-900 text-white text-xl font-bold py-4 rounded-2xl shadow-md transition-transform hover:-translate-y-1 mt-4 flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
                 >
                     <Upload className="w-6 h-6" />
-                    UPLOAD ITEM
+                    {submitting ? "UPLOADING..." : "UPLOAD ITEM"}
                 </button>
 
             </div>
         </form>
+        )}
       </main>
     </div>
   );

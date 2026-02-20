@@ -1,39 +1,43 @@
-"use client";
-import { useState, useEffect } from "react";
+ "use client";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { firebaseAuth } from "@/lib/firebaseClient";
 
 export function Navbar() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const router = useRouter();
+  const [isSignedIn, setIsSignedIn] = useState(false);
 
   useEffect(() => {
-    // A function to check the memory
-    const checkLoginStatus = () => {
-      const status = localStorage.getItem("isLoggedIn");
-      console.log("Memory Check! isLoggedIn =", status); // prints to developer console
-      setIsLoggedIn(status === "true");
+    let mounted = true;
+
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+      if (!mounted) return;
+      setIsSignedIn(!!user);
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
     };
-
-    // 1. Run immediately when you visit the Home page
-    checkLoginStatus();
-
-    // 2. Listen for changes in the background
-    window.addEventListener("storage", checkLoginStatus);
-    
-    // Cleanup
-    return () => window.removeEventListener("storage", checkLoginStatus);
   }, []);
 
-  const handleLogout = () => {
-    // 1. Delete the notes from the browser's memory
-    localStorage.removeItem("isLoggedIn");
-    localStorage.removeItem("userRole");
-    
-    // 2. Instantly update the page to hide the tabs
-    setIsLoggedIn(false); 
+  const handleLogout = async () => {
+    setIsSignedIn(false);
+
+    // Immediately navigate away
+    try { router.replace("/"); } catch (e) {}
+    try { window.location.replace("/"); } catch (e) {}
+
+    // Sign out in background
+    try {
+      await signOut(firebaseAuth);
+    } catch (e) {
+      console.error("signOut error:", e);
+    }
   };
-
-
 
   return (
     <nav className="bg-brand-navy sticky top-0 z-50">
@@ -55,7 +59,7 @@ export function Navbar() {
             <Link href="/contact" className="text-white hover:text-gray-200">
               Contact
             </Link>
-            {isLoggedIn && (
+            {isSignedIn && (
            <>
               <Link 
                 href="/itemsearch" 
@@ -77,7 +81,6 @@ export function Navbar() {
               >
                 Logout
               </button>
-              
            </>
         )}
 
@@ -90,12 +93,14 @@ export function Navbar() {
             >
               Find Your School
             </Link>
-            <Link
-              href="/login"
-              className="bg-white text-black px-4 py-2 ml-10 rounded-lg hover:bg-gray-200"
-            >
-              Log In/Sign Up
-            </Link>
+            {!isSignedIn ? (
+              <Link
+                href="/login"
+                className="bg-white text-black px-4 py-2 ml-10 rounded-lg hover:bg-gray-200"
+              >
+                Log In/Sign Up
+              </Link>
+            ) : null}
           </div>
         </div>
       </div>

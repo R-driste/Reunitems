@@ -1,13 +1,22 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { Home, Info, PenTool, Search, X, Calendar, MapPin, Tag } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Home, Info, Search, X, Calendar, MapPin, Tag } from "lucide-react";
 import Link from "next/link";
+import ClaimButton from "@/components/ClaimButton";
 import Fuse from "fuse.js";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  collection,
+  getDocs,
+  fsQuery,
+  where,
+} from "firebase/firestore";
+import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
 
-// --- TYPE DEFINITION ---
 type Item = {
-  id: number;
+  id: string;
   name: string;
   location: string;
   date: string;
@@ -15,27 +24,56 @@ type Item = {
   color?: string;
 };
 
-// Default items (same as admin)
-const INITIAL_ITEMS: Item[] = [
-  { id: 1, name: "Red Water Bottle", location: "Gym", date: "2024-02-10", description: "Standard red plastic bottle with a white lid.", color: "bg-red-200" },
-  { id: 2, name: "Calculus Textbook", location: "Room 304", date: "2024-02-12", description: "AP Calculus AB, 5th Edition. Has a ripped cover.", color: "bg-blue-200" },
-  { id: 3, name: "Black Hoodie", location: "Cafeteria", date: "2024-02-14", description: "Nike hoodie, size M. Found near table 4.", color: "bg-gray-800" },
-];
-
 export default function SearchPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [allItems, setAllItems] = useState<Item[]>(INITIAL_ITEMS);
-  
-  // --- Track which item is clicked ---
+  const [allItems, setAllItems] = useState<Item[]>([]);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
 
-  // Load items from local storage so students see what admins uploaded
   useEffect(() => {
-    const savedData = localStorage.getItem("inventory");
-    if (savedData) {
-      setAllItems((prev) => [...INITIAL_ITEMS, ...JSON.parse(savedData)]);
-    }
-  }, []);
+    let cancelled = false;
+
+    const loadItems = async (schoolId?: string | null) => {
+      const base = collection(firebaseDb, "items");
+      const q = schoolId
+        ? fsQuery(base, where("schoolId", "==", schoolId))
+        : base;
+      const snap = await getDocs(q);
+      if (cancelled) return;
+      const items: Item[] = snap.docs.map((d) => {
+        const data = d.data() as any;
+        return {
+          id: d.id,
+          name: data.name,
+          location: data.locationName || "Unknown location",
+          date: data.foundDate || "",
+          description: data.description || "",
+          color: data.color || "bg-indigo-200",
+        };
+      });
+      setAllItems(items);
+    };
+
+    const unsub = onAuthStateChanged(firebaseAuth, (user) => {
+      if (!user) {
+        router.replace("/");
+        return;
+      }
+
+      let schoolId: string | null = null;
+      if (typeof window !== "undefined") {
+        schoolId = localStorage.getItem("currentSchoolId");
+      }
+      loadItems(schoolId).catch((e) =>
+        console.error("Failed to load items", e)
+      );
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [router]);
 
   const filteredItems = useMemo(() => {
     if (!query) return allItems;
@@ -158,13 +196,16 @@ export default function SearchPage() {
                         </p>
                     </div>
 
-                    {/* Action Button */}
-                    <button 
+                    {/* Claim button + Close */}
+                    <div className="flex gap-3">
+                      <ClaimButton item={selectedItem} supabase={supabase} />
+                      <button 
                         onClick={() => setSelectedItem(null)}
-                        className="w-full bg-[#1E1B4B] text-white font-bold py-3 rounded-xl hover:bg-indigo-900 transition mt-2 shadow-lg"
-                    >
+                        className="flex-1 bg-[#1E1B4B] text-white font-bold py-3 rounded-xl hover:bg-indigo-900 transition mt-2 shadow-lg"
+                      >
                         Close Details
-                    </button>
+                      </button>
+                    </div>
                 </div>
             </div>
         </div>

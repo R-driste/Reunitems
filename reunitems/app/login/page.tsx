@@ -1,59 +1,179 @@
-"use client";
+“use client”;
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Home, Mail, Lock, School, User, ShieldCheck, GraduationCap, Hash } from "lucide-react";
+import { Home } from "lucide-react";
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  GoogleAuthProvider,
+  signInWithPopup,
+} from "firebase/auth";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  serverTimestamp,
+} from "firebase/firestore";
+import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
+
+type Membership = {
+  id: string;
+  userId: string;
+  schoolId: string;
+  role: "admin" | "student";
+};
 
 export default function LoginPage() {
-
   const router = useRouter();
-  
-  // 'role' state: null = showing selection screen. 'admin' or 'student' = showing respective forms.
-  const [role, setRole] = useState<'admin' | 'student' | null>(null);
-  // Toggle between Login/Signup for the selected form
-  const [isLoginState, setIsLoginState] = useState(true); 
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"admin" | "student" | null>(null);
+  const [schoolName, setSchoolName] = useState("");
 
-  // Switch roles and reset back to the "Login" tab by default
-  const handleRoleSelect = (selectedRole: 'admin' | 'student') => {
-    setRole(selectedRole);
-    setIsLoginState(true);
-  };
-
-  // Simulate Admin Login
-  const handleAdminSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("isLoggedIn", "true"); 
-    localStorage.setItem("userRole", "admin");
-    
-    // Use window.location.href for a hard redirect to refresh the app's memory
-    window.location.href = "/admin/dashboard"; 
-  };
-
-  // Simulate Student Login
-  const handleStudentSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem("isLoggedIn", "true");
-    localStorage.setItem("userRole", "student");
-    
-    window.location.href = "/itemsearch"; 
-  };
-
-  // 1. Create a state to track if the user is logged in (default is false)
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-
-  // 2. When the page loads, check the browser's memory
-    useEffect(() => {
-      const status = localStorage.getItem("isLoggedIn");
-      if (status === "true") {
-        setIsLoggedIn(true);
+  const signIn = async () => {
+    try {
+      const cred = await signInWithEmailAndPassword(firebaseAuth, email, password);
+      const user = cred.user;
+      if (!user) {
+        alert("Unable to sign in. Please try again.");
+        return;
       }
-    }, []);
+
+      // Load memberships for this user
+      const membershipsSnap = await getDocs(
+        query(
+          collection(firebaseDb, "memberships"),
+          where("userId", "==", user.uid)
+        )
+      );
+      const memberships: Membership[] = membershipsSnap.docs.map((d) => ({
+        id: d.id,
+        userId: d.data().userId,
+        schoolId: d.data().schoolId,
+        role: d.data().role,
+      }));
+
+      const adminMembership = memberships.find((m) => m.role === "admin");
+      if (adminMembership) {
+        // Remember current school for admin flows (items, locations, map)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("currentSchoolId", adminMembership.schoolId);
+        }
+      }
+
+    if (role === "admin") {
+      if (adminMembership) {
+        router.replace("/admin/dashboard");
+      } else {
+        // First-time admin login - create school and membership
+        if (!schoolName) {
+          alert("Please provide a school name to create your admin account.");
+          return;
+        }
+
+        try {
+          // Create a school document
+          const schoolRef = await addDoc(collection(firebaseDb, "schools"), {
+            name: schoolName,
+            adminUserId: user.uid,
+            createdAt: serverTimestamp(),
+          });
+
+          // Create membership for this admin
+          await addDoc(collection(firebaseDb, "memberships"), {
+            userId: user.uid,
+            schoolId: schoolRef.id,
+            role: "admin",
+            createdAt: serverTimestamp(),
+          });
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("currentSchoolId", schoolRef.id);
+          }
+
+          alert("Admin school created successfully!");
+          router.replace("/admin/dashboard");
+        } catch (err: any) {
+          console.error(err);
+          alert("Could not create school or membership: " + (err?.message || String(err)));
+        }
+      }
+    } else {
+      router.replace("/itemsearch");
+    }
+    } catch (error: any) {
+      console.error(error);
+      alert(error?.message || "Failed to sign in.");
+    }
+  };
+
+  const signUp = async () => {
+    try {
+      await createUserWithEmailAndPassword(firebaseAuth, email, password);
+
+      if (role === "admin") {
+        alert("Sign up successful! After confirming your email, sign in and we'll set up your admin account.");
+      } else {
+        alert("Sign up successful! You can now sign in to start searching for items.");
+      }
+    } catch (error: any) {
+      console.error(error);
+      alert(error?.message || "Failed to sign up.");
+    }
+  };
+
+  const signInWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      const cred = await signInWithPopup(firebaseAuth, provider);
+      const user = cred.user;
+      if (!user) return;
+
+      // Ensure we have at least a basic membership record for students in the future if needed
+      // For now, we just route based on chosen role.
+      if (role === "admin") {
+        // Admin will still need a school created on first login
+        router.replace("/admin/dashboard");
+      } else {
+        router.replace("/itemsearch");
+      }
+    } catch (error: any) {
+      console.error(error);
+      alert(error?.message || "Google sign-in failed.");
+    }
+  };
+
+  if (role === null) {
+    return (
+      <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans">
+        <header className="p-6 flex justify-between items-center w-full max-w-6xl mx-auto">
+          <Link href="/" className="flex items-center gap-2 text-[#1E1B4B] hover:text-white transition group">
+            <Home className="w-6 h-6 group-hover:scale-110 transition-transform" />
+            <span className="font-bold text-lg">Back to Home</span>
+          </Link>
+          <h1 className="text-2xl font-extrabold text-[#1E1B4B]">ReunItems</h1>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center px-4 pb-20">
+          <div className="bg-white rounded-3xl shadow-xl w-full max-w-2xl p-8 md:p-12 text-center">
+            <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">Welcome!</h2>
+            <p className="text-gray-500 mb-8">Select your role to continue</p>
+            <div className="flex gap-6 justify-center">
+              <button onClick={() => setRole("student")} className="bg-blue-50 p-6 rounded-2xl shadow-sm w-44">I am a Student</button>
+              <button onClick={() => setRole("admin")} className="bg-indigo-50 p-6 rounded-2xl shadow-sm w-44">I am an Admin</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans">
-      
-      {/* --- HEADER --- */}
       <header className="p-6 flex justify-between items-center w-full max-w-6xl mx-auto">
         <Link href="/" className="flex items-center gap-2 text-[#1E1B4B] hover:text-white transition group">
           <Home className="w-6 h-6 group-hover:scale-110 transition-transform" />
@@ -62,125 +182,24 @@ export default function LoginPage() {
         <h1 className="text-2xl font-extrabold text-[#1E1B4B]">ReunItems</h1>
       </header>
 
-      {/* --- MAIN CONTENT --- */}
       <main className="flex-1 flex items-center justify-center px-4 pb-20">
-        
-        {/* --- VIEW 1: ROLE SELECTION SCREEN --- */}
-        {role === null && (
-           <div className="bg-white rounded-3xl shadow-xl w-full max-w-2xl p-8 md:p-12 text-center animate-in fade-in zoom-in-95 duration-300">
-             <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">Welcome!</h2>
-             <p className="text-gray-500 mb-10 text-lg">Please select your role to continue.</p>
-             
-             <div className="flex flex-col md:flex-row gap-6 justify-center">
-                {/* Student Button */}
-                <button onClick={() => handleRoleSelect('student')} className="flex-1 bg-blue-50 border-2 border-blue-100 p-6 rounded-2xl hover:bg-blue-100 hover:border-blue-300 transition group flex flex-col items-center gap-4 shadow-sm">
-                    <div className="bg-blue-200 p-4 rounded-full group-hover:scale-110 transition-transform">
-                        <GraduationCap className="w-10 h-10 text-[#1E1B4B]" />
-                    </div>
-                    <span className="text-xl font-bold text-[#1E1B4B]">I am a Student</span>
-                    <span className="text-sm text-gray-500">Browse lost items and submit forms.</span>
-                </button>
+        <div className="bg-white rounded-3xl shadow-xl w-full max-w-md p-8 md:p-12 text-center">
+          <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">{role === "admin" ? "Admin Login" : "Student Login"}</h2>
 
-                {/* Admin Button */}
-                <button onClick={() => handleRoleSelect('admin')} className="flex-1 bg-indigo-50 border-2 border-indigo-100 p-6 rounded-2xl hover:bg-indigo-100 hover:border-indigo-300 transition group flex flex-col items-center gap-4 shadow-sm">
-                    <div className="bg-[#1E1B4B] p-4 rounded-full group-hover:scale-110 transition-transform">
-                        <ShieldCheck className="w-10 h-10 text-white" />
-                    </div>
-                    <span className="text-xl font-bold text-[#1E1B4B]">I am an Admin</span>
-                    <span className="text-sm text-gray-500">Manage school inventory and settings.</span>
-                </button>
-             </div>
-           </div>
-        )}
-
-        {/* --- VIEW 2: ADMIN FORM --- */}
-        {role === 'admin' && (
-        <div className="bg-white rounded-3xl shadow-xl w-full max-w-md p-8 relative overflow-hidden animate-in slide-in-from-right-8 duration-300">
-          <button onClick={() => setRole(null)} className="text-sm text-gray-400 hover:text-[#1E1B4B] mb-4 flex items-center gap-1 transition">← Back to role selection</button>
-          <h2 className="text-3xl font-bold text-[#1E1B4B] mb-2 text-center">
-            {isLoginState ? "Admin Login" : "Register School"}
-          </h2>
-          <p className="text-gray-500 text-center mb-8">
-            {isLoginState ? "Enter credentials to manage inventory" : "Set up your campus lost & found"}
-          </p>
-
-          <form className="flex flex-col gap-5" onSubmit={handleAdminSubmit}>
-            {!isLoginState && (
-              <div className="relative">
-                <School className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-                <input type="text" placeholder="School Name" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-              </div>
+          <div className="flex flex-col gap-4 mt-6">
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="p-3 rounded-xl border" />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="p-3 rounded-xl border" />
+            {role === "admin" && (
+              <input value={schoolName} onChange={(e) => setSchoolName(e.target.value)} placeholder="School Name" className="p-3 rounded-xl border" />
             )}
-            <div className="relative">
-              <Mail className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-              <input type="email" placeholder="Admin Email Address" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
+            <div className="flex gap-3">
+              <button onClick={signIn} className="flex-1 bg-[#1E1B4B] text-white py-3 rounded-xl">Sign in</button>
+              <button onClick={signUp} className="flex-1 bg-blue-500 text-white py-3 rounded-xl">Sign up</button>
             </div>
-            <div className="relative">
-              <Lock className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-              <input type="password" placeholder="Password" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-            </div>
-
-            <button type="submit" className="w-full bg-[#1E1B4B] text-white font-bold rounded-xl py-4 mt-2 shadow-lg hover:bg-indigo-900 transition hover:-translate-y-1">
-              {isLoginState ? "Log In to Dashboard" : "Create Admin Account"}
-            </button>
-          </form>
-
-          <div className="mt-8 text-center text-sm text-gray-600">
-            {isLoginState ? "Need to register a new school? " : "Already registered? "}
-            <button onClick={() => setIsLoginState(!isLoginState)} className="font-bold text-indigo-600 hover:text-indigo-800 underline transition">
-              {isLoginState ? "Sign Up" : "Log In"}
-            </button>
+            <button onClick={signInWithGoogle} className="mt-2 underline text-sm">Sign in with Google</button>
+            <button onClick={() => setRole(null)} className="text-sm text-gray-500 mt-4">Back</button>
           </div>
         </div>
-        )}
-
-        {/* --- VIEW 3: STUDENT FORM --- */}
-        {role === 'student' && (
-        <div className="bg-white rounded-3xl shadow-xl w-full max-w-md p-8 relative overflow-hidden animate-in slide-in-from-left-8 duration-300">
-          <button onClick={() => setRole(null)} className="text-sm text-gray-400 hover:text-[#1E1B4B] mb-4 flex items-center gap-1 transition">← Back to role selection</button>
-          <h2 className="text-3xl font-bold text-[#1E1B4B] mb-2 text-center">
-            {isLoginState ? "Student Login" : "Create Student Account"}
-          </h2>
-          <p className="text-gray-500 text-center mb-8">
-            {isLoginState ? "Log in to browse or claim items" : "Join your school's network"}
-          </p>
-
-          <form className="flex flex-col gap-5" onSubmit={handleStudentSubmit}>
-            {!isLoginState && (
-              <>
-                <div className="relative">
-                  <User className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-                  <input type="text" placeholder="Full Name" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-                </div>
-                <div className="relative">
-                  <Hash className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-                  <input type="text" placeholder="Student ID Number" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-                </div>
-              </>
-            )}
-            <div className="relative">
-              <Mail className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-              <input type="email" placeholder="Student Email Address" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-            </div>
-            <div className="relative">
-              <Lock className="absolute left-4 top-3.5 text-gray-400 w-5 h-5" />
-              <input type="password" placeholder="Password" className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-12 pr-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition" required />
-            </div>
-
-            <button type="submit" className="w-full bg-blue-500 text-white font-bold rounded-xl py-4 mt-2 shadow-lg hover:bg-blue-600 transition hover:-translate-y-1">
-              {isLoginState ? "Log In" : "Sign Up"}
-            </button>
-          </form>
-
-          <div className="mt-8 text-center text-sm text-gray-600">
-            {isLoginState ? "Don't have an account yet? " : "Already have an account? "}
-            <button onClick={() => setIsLoginState(!isLoginState)} className="font-bold text-blue-500 hover:text-blue-700 underline transition">
-              {isLoginState ? "Sign Up" : "Log In"}
-            </button>
-          </div>
-        </div>
-        )}
-
       </main>
     </div>
   );

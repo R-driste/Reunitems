@@ -1,59 +1,124 @@
-"use client";
+ "use client";
 
 import { useState, useMemo, useEffect } from "react";
 import { Search, Plus, MoreVertical, LogOut, Trash2, Edit, X, Calendar, MapPin, Tag } from "lucide-react";
 import Link from "next/link";
 import Fuse from "fuse.js";
+import { useRouter } from "next/navigation";
+import { onAuthStateChanged } from "firebase/auth";
+import {
+  collection,
+  query as fsQuery,
+  where,
+  getDocs,
+  deleteDoc,
+  doc,
+  updateDoc,
+} from "firebase/firestore";
+import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
 
 // --- TYPE DEFINITION ---
 type Item = {
-  id: number;
+  id: string;
   name: string;
   location: string;
   date: string;
   description: string;
-  color?: string; 
+  color?: string;
 };
 
-const INITIAL_ITEMS: Item[] = [
-  { id: 1, name: "Red Water Bottle", location: "Gym", date: "2024-02-10", description: "Standard red plastic bottle with a white lid.", color: "bg-red-200" },
-  { id: 2, name: "Calculus Textbook", location: "Room 304", date: "2024-02-12", description: "AP Calculus AB, 5th Edition. Has a ripped cover.", color: "bg-blue-200" },
-  { id: 3, name: "Black Hoodie", location: "Cafeteria", date: "2024-02-14", description: "Nike hoodie, size M. Found near table 4.", color: "bg-gray-800" },
-];
-
 export default function AdminDashboardPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
-  const [allItems, setAllItems] = useState<Item[]>(INITIAL_ITEMS);
-  const [activeMenuId, setActiveMenuId] = useState<number | null>(null);
-  
-  // --- Track which item is currently being viewed in the popup ---
+  const [allItems, setAllItems] = useState<Item[]>([]);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
 
   useEffect(() => {
-    const savedData = localStorage.getItem("inventory");
-    if (savedData) {
-      setAllItems((prev) => [...INITIAL_ITEMS, ...JSON.parse(savedData)]);
-    }
-  }, []);
+    let cancelled = false;
 
-  const handleDelete = (idToDelete: number) => {
-    if (confirm("Are you sure you want to remove this item?")) {
-      const updatedList = allItems.filter((item) => item.id !== idToDelete);
-      setAllItems(updatedList);
-      const userAddedItems = updatedList.filter(item => item.id > 100);
-      localStorage.setItem("inventory", JSON.stringify(userAddedItems));
+    const load = async () => {
+      const user = firebaseAuth.currentUser;
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      const membershipsSnap = await getDocs(
+        fsQuery(
+          collection(firebaseDb, "memberships"),
+          where("userId", "==", user.uid),
+          where("role", "==", "admin")
+        )
+      );
+      const membershipDoc = membershipsSnap.docs[0];
+      if (!membershipDoc) {
+        router.replace("/");
+        return;
+      }
+      const schoolId = membershipDoc.data().schoolId as string;
+      if (typeof window !== "undefined") {
+        localStorage.setItem("currentSchoolId", schoolId);
+      }
+
+      const itemsSnap = await getDocs(
+        fsQuery(
+          collection(firebaseDb, "items"),
+          where("schoolId", "==", schoolId)
+        )
+      );
+
+      if (cancelled) return;
+      const items: Item[] = itemsSnap.docs.map((d) => {
+        const data = d.data() as any;
+        return {
+          id: d.id,
+          name: data.name,
+          location: data.locationName || "Unknown location",
+          date: data.foundDate || "",
+          description: data.description || "",
+          color: data.color || "bg-indigo-200",
+        };
+      });
+      setAllItems(items);
+    };
+
+    const unsub = onAuthStateChanged(firebaseAuth, () => {
+      load().catch((e) => console.error("Failed to load admin data", e));
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [router]);
+
+  const handleDelete = async (idToDelete: string) => {
+    if (!confirm("Are you sure you want to remove this item?")) return;
+    try {
+      await deleteDoc(doc(firebaseDb, "items", idToDelete));
+      setAllItems((prev) => prev.filter((item) => item.id !== idToDelete));
       setActiveMenuId(null);
+    } catch (e) {
+      console.error("delete item error", e);
+      alert("Could not delete item.");
     }
   };
 
-  const handleEdit = (idToEdit: number) => {
-    const item = allItems.find(i => i.id === idToEdit);
+  const handleEdit = async (idToEdit: string) => {
+    const item = allItems.find((i) => i.id === idToEdit);
     if (!item) return;
     const newName = prompt("Edit Item Name:", item.name);
-    if (newName) {
-      const updatedList = allItems.map(i => i.id === idToEdit ? { ...i, name: newName } : i);
-      setAllItems(updatedList);
+    if (!newName) return;
+    try {
+      await updateDoc(doc(firebaseDb, "items", idToEdit), { name: newName });
+      setAllItems((prev) =>
+        prev.map((i) => (i.id === idToEdit ? { ...i, name: newName } : i))
+      );
       setActiveMenuId(null);
+    } catch (e) {
+      console.error("edit item error", e);
+      alert("Could not update item name.");
     }
   };
 
@@ -63,16 +128,29 @@ export default function AdminDashboardPage() {
     return fuse.search(query).map((result) => result.item);
   }, [query, allItems]);
 
+  const handleLogout = async () => {
+    // Navigate immediately
+    try { router.replace('/'); } catch (e) {}
+    try { window.location.replace('/'); } catch (e) {}
+
+    // Sign out in background
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error('Admin signOut error', e);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans" onClick={() => setActiveMenuId(null)}>
       
       {/* --- HEADER --- */}
       <header className="px-6 py-4 flex items-center justify-between bg-[#8B9AF0]">
         <h1 className="text-2xl font-extrabold text-[#1E1B4B]">Admin Dashboard</h1>
-        <Link href="/login" className="flex items-center gap-2 text-white hover:text-[#1E1B4B] transition">
-            <LogOut className="w-5 h-5" />
-            <span className="text-sm font-bold">Logout</span>
-        </Link>
+        <button onClick={handleLogout} className="flex items-center gap-2 text-white hover:text-[#1E1B4B] transition">
+          <LogOut className="w-5 h-5" />
+          <span className="text-sm font-bold">Logout</span>
+        </button>
       </header>
 
       {/* --- MAIN CONTENT --- */}
