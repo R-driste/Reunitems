@@ -1,29 +1,55 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Home } from "lucide-react";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
+  onAuthStateChanged,
 } from "firebase/auth";
-import { doc, addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { doc, addDoc, collection, serverTimestamp, GeoPoint } from "firebase/firestore";
 import { firebaseAuth, firebaseDb } from "@/lib/firebaseClient";
 import {
   createOrUpdateUser,
   getUserOrganizations,
   addMember,
+  getAllOrganizations,
+  type Organization,
 } from "@/lib/firebaseHelpers";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const registerOrg = searchParams.get("registerOrg") === "1";
+
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"admin" | "student" | null>(null);
-  const [orgName, setOrgName] = useState("");
+  const [isSignUp, setIsSignUp] = useState(registerOrg);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState("");
+  const [applyAsRole, setApplyAsRole] = useState<"admin" | "regular">("regular");
+  const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgAddress, setNewOrgAddress] = useState("");
+  const [newOrgLat, setNewOrgLat] = useState("");
+  const [newOrgLng, setNewOrgLng] = useState("");
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(firebaseAuth, setCurrentUser);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    getAllOrganizations().then(setOrganizations).catch(console.error);
+  }, []);
+
+  const redirectToProfile = () => {
+    router.replace("/profile");
+  };
 
   const signIn = async () => {
     try {
@@ -33,87 +59,91 @@ export default function LoginPage() {
         alert("Unable to sign in. Please try again.");
         return;
       }
-
-      // Create/update user in Users collection
       await createOrUpdateUser(user.uid, {
         UserEmail: user.email || "",
         UserName: user.displayName || user.email || undefined,
       });
-
-      // Get user's organizations
       const userOrgs = await getUserOrganizations(user.uid);
-      const adminOrg = userOrgs.find((uo) => uo.member.UserRole === "admin");
-
-      if (role === "admin") {
-        if (adminOrg) {
-          // Remember current organization for admin flows
-          if (typeof window !== "undefined") {
-            localStorage.setItem("currentOrgId", adminOrg.orgId);
-          }
-          router.replace("/admin/dashboard");
-        } else {
-          // First-time admin login - create organization and member
-          if (!orgName) {
-            alert("Please provide an organization name to create your admin account.");
-            return;
-          }
-
-          try {
-            // Create an organization document
-            const orgRef = await addDoc(collection(firebaseDb, "Organizations"), {
-              name: orgName,
-              createdAt: serverTimestamp(),
-            });
-
-            // Create member for this admin in Organizations/Members subcollection
-            await addMember(orgRef.id, {
-              UserRef: doc(firebaseDb, "Users", user.uid),
-              UserRole: "admin",
-              ApplicationStatus: "approved",
-            });
-
-            if (typeof window !== "undefined") {
-              localStorage.setItem("currentOrgId", orgRef.id);
-            }
-
-            alert("Admin organization created successfully!");
-            router.replace("/admin/dashboard");
-          } catch (err: any) {
-            console.error(err);
-            alert("Could not create organization or member: " + (err?.message || String(err)));
-          }
-        }
-      } else {
-        // Regular user - find their organization or show item search
-        if (userOrgs.length > 0) {
-          if (typeof window !== "undefined") {
-            localStorage.setItem("currentOrgId", userOrgs[0].orgId);
-          }
-        }
-        router.replace("/itemsearch");
+      if (userOrgs.length > 0 && typeof window !== "undefined") {
+        localStorage.setItem("currentOrgId", userOrgs[0].orgId);
       }
+      redirectToProfile();
     } catch (error: any) {
       console.error(error);
       alert(error?.message || "Failed to sign in.");
     }
   };
 
+  const registerOrganization = async (userId: string) => {
+    if (!newOrgName.trim()) {
+      alert("Please enter an organization name.");
+      return;
+    }
+    const orgData: Record<string, unknown> = {
+      name: newOrgName.trim(),
+      Address: newOrgAddress.trim() || undefined,
+      AppliedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      OrgApprovalStatus: "pending",
+    };
+    if (newOrgLat && newOrgLng && !isNaN(Number(newOrgLat)) && !isNaN(Number(newOrgLng))) {
+      orgData.LocPoint = new GeoPoint(Number(newOrgLat), Number(newOrgLng));
+    }
+    const orgRef = await addDoc(collection(firebaseDb, "Organizations"), orgData);
+    await addMember(orgRef.id, userId, {
+      UserRole: "superadmin",
+      ApplicationStatus: "pending",
+    });
+    if (typeof window !== "undefined") {
+      localStorage.setItem("currentOrgId", orgRef.id);
+    }
+    alert("Organization application submitted! It will appear after approval by the ReunItems team.");
+    redirectToProfile();
+  };
+
   const signUp = async () => {
     try {
+      if (registerOrg) {
+        if (currentUser) {
+          await registerOrganization(currentUser.uid);
+          return;
+        }
+        if (!newOrgName.trim()) {
+          alert("Please enter an organization name.");
+          return;
+        }
+      } else if (isSignUp && !selectedOrgId) {
+        alert("Please select an organization.");
+        return;
+      }
+
       const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
       const user = cred.user;
-
-      // Create user in Users collection
+      if (!user) {
+        alert("Sign up failed.");
+        return;
+      }
       await createOrUpdateUser(user.uid, {
         UserEmail: user.email || "",
         UserName: user.displayName || user.email || undefined,
       });
 
-      if (role === "admin") {
-        alert("Sign up successful! After confirming your email, sign in and we'll set up your admin account.");
-      } else {
-        alert("Sign up successful! You can now sign in to start searching for items.");
+      if (registerOrg && newOrgName.trim()) {
+        await registerOrganization(user.uid);
+        return;
       }
+
+      if (selectedOrgId) {
+        await addMember(selectedOrgId, user.uid, {
+          UserRole: applyAsRole,
+          ApplicationStatus: "pending",
+        });
+        if (typeof window !== "undefined") {
+          localStorage.setItem("currentOrgId", selectedOrgId);
+        }
+        alert("Application submitted! An admin will approve your access.");
+      }
+      redirectToProfile();
     } catch (error: any) {
       console.error(error);
       alert(error?.message || "Failed to sign up.");
@@ -126,65 +156,32 @@ export default function LoginPage() {
       const cred = await signInWithPopup(firebaseAuth, provider);
       const user = cred.user;
       if (!user) return;
-
-      // Create/update user in Users collection
       await createOrUpdateUser(user.uid, {
         UserEmail: user.email || "",
         UserName: user.displayName || user.email || undefined,
       });
-
-      // Get user's organizations
       const userOrgs = await getUserOrganizations(user.uid);
-      const adminOrg = userOrgs.find((uo) => uo.member.UserRole === "admin");
-
-      if (role === "admin") {
-        if (adminOrg) {
-          if (typeof window !== "undefined") {
-            localStorage.setItem("currentOrgId", adminOrg.orgId);
-          }
-          router.replace("/admin/dashboard");
-        } else {
-          // Admin will need to create organization on first login
-          router.replace("/admin/dashboard");
-        }
-      } else {
-        if (userOrgs.length > 0) {
-          if (typeof window !== "undefined") {
-            localStorage.setItem("currentOrgId", userOrgs[0].orgId);
-          }
-        }
-        router.replace("/itemsearch");
+      if (userOrgs.length > 0 && typeof window !== "undefined") {
+        localStorage.setItem("currentOrgId", userOrgs[0].orgId);
       }
+      redirectToProfile();
     } catch (error: any) {
       console.error(error);
       alert(error?.message || "Google sign-in failed.");
     }
   };
 
-  if (role === null) {
-    return (
-      <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans">
-        <header className="p-6 flex justify-between items-center w-full max-w-6xl mx-auto">
-          <Link href="/" className="flex items-center gap-2 text-[#1E1B4B] hover:text-white transition group">
-            <Home className="w-6 h-6 group-hover:scale-110 transition-transform" />
-            <span className="font-bold text-lg">Back to Home</span>
-          </Link>
-          <h1 className="text-2xl font-extrabold text-[#1E1B4B]">ReunItems</h1>
-        </header>
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (registerOrg && currentUser) {
+      registerOrganization(currentUser.uid);
+      return;
+    }
+    if (isSignUp) signUp();
+    else signIn();
+  };
 
-        <main className="flex-1 flex items-center justify-center px-4 pb-20">
-          <div className="bg-white rounded-3xl shadow-xl w-full max-w-2xl p-8 md:p-12 text-center">
-            <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">Welcome!</h2>
-            <p className="text-gray-500 mb-8">Select your role to continue</p>
-            <div className="flex gap-6 justify-center">
-              <button onClick={() => setRole("student")} className="bg-blue-50 p-6 rounded-2xl shadow-sm w-44">I am a Student</button>
-              <button onClick={() => setRole("admin")} className="bg-indigo-50 p-6 rounded-2xl shadow-sm w-44">I am an Admin</button>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  const isRegisterOrgOnly = registerOrg && currentUser;
 
   return (
     <div className="min-h-screen bg-[#AEC0F3] flex flex-col font-sans">
@@ -198,21 +195,138 @@ export default function LoginPage() {
 
       <main className="flex-1 flex items-center justify-center px-4 pb-20">
         <div className="bg-white rounded-3xl shadow-xl w-full max-w-md p-8 md:p-12 text-center">
-          <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">{role === "admin" ? "Admin Login" : "Student Login"}</h2>
+          <h2 className="text-3xl font-bold text-[#1E1B4B] mb-4">
+            {isRegisterOrgOnly
+              ? "Register your organization"
+              : registerOrg
+                ? "Sign up & register organization"
+                : isSignUp
+                  ? "Sign up"
+                  : "Log in"}
+          </h2>
+          {isRegisterOrgOnly && (
+            <p className="text-sm text-gray-600 mb-4">
+              You’re signed in as {currentUser?.email}. Submitting will create an organization that goes through approval.
+            </p>
+          )}
 
-          <div className="flex flex-col gap-4 mt-6">
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="p-3 rounded-xl border" />
-            <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="p-3 rounded-xl border" />
-            {role === "admin" && (
-              <input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Organization Name" className="p-3 rounded-xl border" />
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4 mt-6 text-left">
+            {!isRegisterOrgOnly && (
+              <>
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email"
+                  type="email"
+                  className="p-3 rounded-xl border w-full"
+                  required={!registerOrg}
+                />
+                <input
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  type="password"
+                  className="p-3 rounded-xl border w-full"
+                  required={!registerOrg}
+                />
+              </>
             )}
+
+            {(registerOrg || isRegisterOrgOnly) && (
+              <>
+                <input
+                  value={newOrgName}
+                  onChange={(e) => setNewOrgName(e.target.value)}
+                  placeholder="Organization name *"
+                  className="p-3 rounded-xl border w-full"
+                  required
+                />
+                <input
+                  value={newOrgAddress}
+                  onChange={(e) => setNewOrgAddress(e.target.value)}
+                  placeholder="Address (street, city, state, zip)"
+                  className="p-3 rounded-xl border w-full"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={newOrgLat}
+                    onChange={(e) => setNewOrgLat(e.target.value)}
+                    placeholder="Latitude (optional)"
+                    type="text"
+                    className="p-3 rounded-xl border w-full"
+                  />
+                  <input
+                    value={newOrgLng}
+                    onChange={(e) => setNewOrgLng(e.target.value)}
+                    placeholder="Longitude (optional)"
+                    type="text"
+                    className="p-3 rounded-xl border w-full"
+                  />
+                </div>
+              </>
+            )}
+
+            {isSignUp && !registerOrg && organizations.length > 0 && (
+              <>
+                <label className="text-sm font-medium text-gray-700">Apply to organization</label>
+                <select
+                  value={selectedOrgId}
+                  onChange={(e) => setSelectedOrgId(e.target.value)}
+                  className="p-3 rounded-xl border w-full"
+                  required
+                >
+                  <option value="">Select organization</option>
+                  {organizations.map((org) => (
+                    <option key={org.id} value={org.id}>
+                      {org.name || org.id}
+                    </option>
+                  ))}
+                </select>
+                <label className="text-sm font-medium text-gray-700">Apply as</label>
+                <select
+                  value={applyAsRole}
+                  onChange={(e) => setApplyAsRole(e.target.value as "admin" | "regular")}
+                  className="p-3 rounded-xl border w-full"
+                >
+                  <option value="regular">Student</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </>
+            )}
+
             <div className="flex gap-3">
-              <button onClick={signIn} className="flex-1 bg-[#1E1B4B] text-white py-3 rounded-xl">Sign in</button>
-              <button onClick={signUp} className="flex-1 bg-blue-500 text-white py-3 rounded-xl">Sign up</button>
+              <button type="submit" className="flex-1 bg-[#1E1B4B] text-white py-3 rounded-xl">
+                {isRegisterOrgOnly ? "Submit application" : isSignUp ? "Sign up" : "Sign in"}
+              </button>
             </div>
-            <button onClick={signInWithGoogle} className="mt-2 underline text-sm">Sign in with Google</button>
-            <button onClick={() => setRole(null)} className="text-sm text-gray-500 mt-4">Back</button>
-          </div>
+          </form>
+
+          {!isRegisterOrgOnly && (
+            <>
+              <button onClick={signInWithGoogle} className="mt-2 underline text-sm w-full">
+                Sign in with Google
+              </button>
+              <button
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  if (registerOrg) router.replace("/login");
+                }}
+                className="text-sm text-gray-500 mt-4"
+              >
+                {isSignUp ? "Already have an account? Log in" : "Don't have an account? Sign up"}
+              </button>
+            </>
+          )}
+
+          {isSignUp && !registerOrg && (
+            <p className="text-xs text-gray-500 mt-2">
+              Don't see your organization?{" "}
+              <Link href="/schoolfind" className="text-indigo-600 underline">
+                Find your organization
+              </Link>{" "}
+              and click &quot;Register your organization&quot;.
+            </p>
+          )}
         </div>
       </main>
     </div>

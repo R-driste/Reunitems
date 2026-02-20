@@ -36,7 +36,7 @@ export default function Home() {
                 color1="#0e004c"
                 color2="#1e40af"
               >
-                Find Your School
+                Find Your Organization
               </Button>
               
 

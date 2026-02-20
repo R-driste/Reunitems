@@ -7,7 +7,7 @@ export default function Home() {
         <p> </p>
         <p> </p>
         <h1 className="text-8xl font-bold text-center">Our Team (Hash Browns)</h1>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 px-6 mt-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 px-6 mt-8 max-w-4xl mx-auto">
           <div className="flex flex-col items-center text-center">
             <Image 
               src="/assets/dristi.png"
@@ -30,18 +30,6 @@ export default function Home() {
             />
             <h2 className="text-2xl font-bold">Lily</h2>
             <p className="text-gray-600 mt-2">Hi! I'm a physics and game dev enthusiast</p>
-          </div>
-
-          <div className="flex flex-col items-center text-center">
-            <Image 
-              src="/assets/aimery.png"
-              alt="Aimery"
-              width={250} 
-              height={250}
-              className="rounded-lg mb-4"
-            />
-            <h2 className="text-2xl font-bold">Aimery</h2>
-            <p className="text-gray-600 mt-2">Hi! I'm an incoming business major.</p>
           </div>
         </div>
         <h1 className="text-5xl font-bold text-center mt-6">Our Directions</h1>

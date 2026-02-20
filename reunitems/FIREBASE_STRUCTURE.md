@@ -11,6 +11,10 @@ This document describes the Firebase Firestore database structure implemented in
 - **Document ID**: Auto-generated (ORG_REF_ID)
 - **Fields**:
   - `name` (string): Organization name
+  - `Address` (string): Address (street, city, state, zip)
+  - `LocPoint` (geopoint): Optional geographic point for the organization
+  - `AppliedAt` (timestamp): When the organization application was submitted
+  - `OrgApprovalStatus` (string): "pending" | "approved" | "denied" — org is hidden until approved by superadmin
   - `createdAt` (timestamp): Creation timestamp
 
 **Subcollections:**
@@ -30,7 +34,13 @@ This document describes the Firebase Firestore database structure implemented in
 **Subcollections:**
 - `MyApplications` - Applications to join organizations
 
-#### 3. Claims (Collection)
+#### 3. AppAdmins (Collection)
+- **Purpose**: Application-level superadmins who can approve/deny organization applications
+- **Document ID**: Firebase Auth UID (one document per superadmin)
+- **Fields**: (empty document is enough)
+- **How to add**: In Firestore Console, create a document in collection `AppAdmins` with document ID = your Firebase Auth UID (from profile or Auth console).
+
+#### 4. Claims (Collection)
 - **Purpose**: Item claims made by users
 - **Document ID**: Auto-generated (CLAIM_REF_ID)
 - **Fields**:
@@ -67,7 +77,7 @@ This document describes the Firebase Firestore database structure implemented in
 
 #### Organizations/{orgId}/Members
 - **Purpose**: Users who belong to this organization
-- **Document ID**: Auto-generated (MEMBER_REF_ID)
+- **Document ID**: Firebase Auth UID (USER_REF_ID) — same as the user’s UID so security rules can check admin/member
 - **Fields**:
   - `UserRef` (reference): Reference to Users/{userId}
   - `UserRole` (string): "admin" or "regular"

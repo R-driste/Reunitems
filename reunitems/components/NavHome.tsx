@@ -5,17 +5,34 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { firebaseAuth } from "@/lib/firebaseClient";
+import { getUserOrganizations } from "@/lib/firebaseHelpers";
 
 export function Navbar() {
   const router = useRouter();
   const [isSignedIn, setIsSignedIn] = useState(false);
+  const [hasApprovedAdminOrg, setHasApprovedAdminOrg] = useState(false);
 
   useEffect(() => {
     let mounted = true;
 
-    const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
       if (!mounted) return;
       setIsSignedIn(!!user);
+      if (user) {
+        try {
+          const orgs = await getUserOrganizations(user.uid);
+          const hasAdmin = orgs.some(
+            (o) =>
+              o.member.ApplicationStatus === "approved" &&
+              (o.member.UserRole === "admin" || o.member.UserRole === "superadmin")
+          );
+          setHasApprovedAdminOrg(hasAdmin);
+        } catch {
+          setHasApprovedAdminOrg(false);
+        }
+      } else {
+        setHasApprovedAdminOrg(false);
+      }
     });
 
     return () => {
@@ -62,19 +79,35 @@ export function Navbar() {
             {isSignedIn && (
            <>
               <Link 
+                href="/profile" 
+                className="text-white hover:text-gray-300 transition-colors"
+              >
+                Profile
+              </Link>
+              <Link 
                 href="/itemsearch" 
                 className="text-white hover:text-gray-300 transition-colors"
               >
                 Search for Your Items
               </Link>
-              
               <Link 
                 href="/forms" 
                 className="text-white hover:text-gray-300 transition-colors"
               >
                 Report/Claim Forms
               </Link>
-
+              <Link 
+                href="/admin/dashboard" 
+                className="text-white hover:text-gray-300 transition-colors"
+              >
+                Admin
+              </Link>
+              <Link 
+                href="/superadmin" 
+                className="text-white hover:text-gray-300 transition-colors"
+              >
+                App admin
+              </Link>
               <button 
                 onClick={handleLogout} 
                 className="text-red-300 hover:text-red-400 font-bold transition-colors cursor-pointer ml-4"
@@ -91,7 +124,7 @@ export function Navbar() {
               href="/schoolfind"
               className="bg-white text-black px-4 py-2 rounded-lg hover:bg-gray-200"
             >
-              Find Your School
+              Find Your Organization
             </Link>
             {!isSignedIn ? (
               <Link

@@ -17,13 +17,18 @@ import {
 import { firebaseDb } from "./firebaseClient";
 
 // Type definitions matching the new structure
-export type UserRole = "admin" | "regular";
+export type UserRole = "superadmin" | "admin" | "regular"; // superadmin = org owner, can approve admins; admin = can approve students
 export type ApplicationStatus = "pending" | "approved" | "denied";
+export type OrgApprovalStatus = "pending" | "approved" | "denied";
 
 export interface Organization {
   id: string;
   name?: string;
-  // Add other org fields as needed
+  Address?: string;
+  LocPoint?: GeoPoint;
+  AppliedAt?: any; // Firestore Timestamp
+  createdAt?: any;
+  OrgApprovalStatus?: OrgApprovalStatus; // pending until superadmin approves
 }
 
 export interface Location {
@@ -82,6 +87,38 @@ export const getOrganization = async (orgId: string) => {
   const orgDoc = await getDoc(doc(firebaseDb, "Organizations", orgId));
   if (!orgDoc.exists()) return null;
   return { id: orgDoc.id, ...orgDoc.data() } as Organization;
+};
+
+/** Returns only approved organizations (for public listing e.g. Find your organization). */
+export const getAllOrganizations = async (): Promise<Organization[]> => {
+  const orgsSnap = await getDocs(collection(firebaseDb, "Organizations"));
+  return orgsSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Organization))
+    .filter((org) => org.OrgApprovalStatus === "approved" || org.OrgApprovalStatus == null);
+};
+
+/** For superadmin: list organizations pending approval. */
+export const getPendingOrganizations = async (): Promise<Organization[]> => {
+  const orgsSnap = await getDocs(
+    query(
+      collection(firebaseDb, "Organizations"),
+      where("OrgApprovalStatus", "==", "pending")
+    )
+  );
+  return orgsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Organization));
+};
+
+export const updateOrganization = async (
+  orgId: string,
+  updates: Partial<Organization>
+) => {
+  return await updateDoc(doc(firebaseDb, "Organizations", orgId), updates);
+};
+
+/** Check if the user is an app-level superadmin (can approve org applications). */
+export const isSuperAdmin = async (userId: string): Promise<boolean> => {
+  const docSnap = await getDoc(doc(firebaseDb, "AppAdmins", userId));
+  return docSnap.exists();
 };
 
 // Helper functions for Locations (subcollection of Organizations)
@@ -201,14 +238,18 @@ export const getMemberByUser = async (
   return { id: memberDoc.id, ...memberDoc.data() } as Member;
 };
 
+/** Add or set a member. Use userId as document ID so security rules can identify org admins. */
 export const addMember = async (
   orgId: string,
-  memberData: Omit<Member, "id">
+  userId: string,
+  memberData: Pick<Member, "UserRole" | "ApplicationStatus">
 ) => {
-  return await addDoc(
-    collection(firebaseDb, "Organizations", orgId, "Members"),
+  return await setDoc(
+    doc(firebaseDb, "Organizations", orgId, "Members", userId),
     {
-      ...memberData,
+      UserRef: doc(firebaseDb, "Users", userId),
+      UserRole: memberData.UserRole,
+      ApplicationStatus: memberData.ApplicationStatus,
       createdAt: serverTimestamp(),
     }
   );
